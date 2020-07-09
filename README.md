@@ -1,2 +1,1 @@
-# gazebo_segmentation
-Gazebo segmentation plugin for ROS
+Gazebo camera segmentation plugin
