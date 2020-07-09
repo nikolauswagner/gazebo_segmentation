@@ -1,21 +1,21 @@
 #include <gazebo_segmentation/gazebo_segmentation.h>
 
-#include <sensor_msgs/fill_image.h>
-#include <gazebo/rendering/Scene.hh>
-#include <gazebo/rendering/RayQuery.hh>
-#include <gazebo/rendering/Conversions.hh>
-#include <ignition/math.hh>
 #include <gazebo_segmentation/NewMOC.h>
+#include <sensor_msgs/fill_image.h>
+#include <gazebo/rendering/Conversions.hh>
 #include <thread>
-#include <stdlib.h>
 
 namespace gazebo {
 
 GZ_REGISTER_MODEL_PLUGIN(SegmentationPlugin)
 
 SegmentationPlugin::SegmentationPlugin() 
-    : color_cam_(nullptr),
-      logic_cam_(nullptr) {
+    : logic_cam_(nullptr),
+      color_cam_(nullptr),
+      depth_cam_(nullptr),
+      clip_near_(0.0),
+      clip_far_(10.0),
+      robot_namespace_("") {
 
 }
 
@@ -33,47 +33,78 @@ void SegmentationPlugin::Load(physics::ModelPtr _parent, sdf::ElementPtr _sdf) {
   }
 
   // Setup params
-  this->robot_namespace_ = "";
   if(_sdf->HasElement("robot_namespace")) {
     this->robot_namespace_ = _sdf->GetElement("robot_namespace")->Get<std::string>() + "/";
+  }
+  if(_sdf->HasElement("near")) {
+    this->clip_near_ = _sdf->GetElement("near")->Get<float>();
+  }
+  if(_sdf->HasElement("far")) {
+    this->clip_far_ = _sdf->GetElement("far")->Get<float>();
   }
 
   // Get Gazebo sensors
   sensors::SensorManager *sensor_mngr = sensors::SensorManager::Instance();
   this->logic_cam_ = std::dynamic_pointer_cast<sensors::LogicalCameraSensor>(
       sensor_mngr->GetSensor(this->robot_namespace_ + LOGICAL_CAMERA_NAME));
-  this->color_cam_ = std::dynamic_pointer_cast<sensors::CameraSensor>(
-      sensor_mngr->GetSensor(this->robot_namespace_ + COLOR_CAMERA_NAME))->Camera();
+  auto color_sensor = std::dynamic_pointer_cast<sensors::CameraSensor>(
+      sensor_mngr->GetSensor(this->robot_namespace_ + COLOR_CAMERA_NAME));
+  auto depth_sensor = std::dynamic_pointer_cast<sensors::DepthCameraSensor>(
+      sensor_mngr->GetSensor(this->robot_namespace_ + DEPTH_CAMERA_NAME));
   if(!this->logic_cam_) {
     ROS_FATAL_STREAM("SegmentationPlugin: Missing logical camera!\n" <<
-                     "-> (needs to be named 'logical')");
+                     "-> needs to be named 'logical'");
     return;
   }
-  if(!this->color_cam_ || this->color_cam_->ImageFormat() != "RGB_INT8") {
+  if(!color_sensor || color_sensor->Camera()->ImageFormat() != "RGB_INT8") {
     ROS_FATAL_STREAM("SegmentationPlugin: Missing color camera!\n" <<
-                     "-> (needs to be named 'color')" << 
-                     "-> (needs to have format 'RGB_INT8')");
+                     "-> needs to be named 'color'" << 
+                     "-> needs to have format 'RGB_INT8'");
+    return;
+  }
+  if(!depth_sensor) {
+    ROS_FATAL_STREAM("SegmentationPlugin: Missing depth camera!\n" <<
+                     "-> needs to be named 'depth'");
+    return;
+  }
+  this->color_cam_ = color_sensor->Camera();
+  this->depth_cam_ = depth_sensor->DepthCamera();
+  if(this->depth_cam_->ImageWidth() != this->color_cam_->ImageWidth() ||
+     this->depth_cam_->ImageHeight() != this->color_cam_->ImageHeight()) {
+    ROS_FATAL_STREAM("SegmentationPlugin: Resolution mismatch!\n" <<
+                     "-> Color: " << 
+                     this->color_cam_->ImageWidth() << "*" << this->color_cam_->ImageWidth() <<
+                     "-> Depth: " << 
+                     this->depth_cam_->ImageWidth() << "*" << this->depth_cam_->ImageWidth());
     return;
   }
 
   // Setup Gazebo transport
   this->world_ = _parent->GetWorld();
+  this->scene_ = this->color_cam_->GetScene();
   this->transport_node_ = transport::NodePtr(new transport::Node());
-  #if GAZEBO_MAJOR_VERSION >= 9
-    this->transport_node_->Init(_parent->GetWorld()->Name());
-  #else
-    this->transport_node_->Init(_parent->GetWorld()->GetName());
-  #endif
+#if GAZEBO_MAJOR_VERSION >= 9
+  this->transport_node_->Init(_parent->GetWorld()->Name());
+#else
+  this->transport_node_->Init(_parent->GetWorld()->GetName());
+#endif
   this->color_cam_conn_ = this->color_cam_->ConnectNewImageFrame(
       std::bind(&SegmentationPlugin::onColorFrame, this));
-
-  // Subscribe to Gazebo publishers
+  this->depth_cam_conn_ = this->depth_cam_->ConnectNewImageFrame(
+      std::bind(&SegmentationPlugin::onDepthFrame, this));
   this->logic_cam_sub_ = this->transport_node_->Subscribe(this->logic_cam_->Topic(),
                                                           &SegmentationPlugin::onLogicFrame, 
                                                           this);
   // Setup segmentation map
   try {
     this->segmentation_map_.resize(this->color_cam_->ImageWidth() * this->color_cam_->ImageHeight());
+  } catch (std::bad_alloc &e) {
+    ROS_FATAL_STREAM("SegmentationPlugin: segmentation_map allocation failed: " << e.what());
+    return;
+  }
+  // Setup depth map
+  try {
+    this->depth_map_.resize(this->depth_cam_->ImageWidth() * this->depth_cam_->ImageHeight());
   } catch (std::bad_alloc &e) {
     ROS_FATAL_STREAM("SegmentationPlugin: segmentation_map allocation failed: " << e.what());
     return;
@@ -87,27 +118,6 @@ void SegmentationPlugin::Load(physics::ModelPtr _parent, sdf::ElementPtr _sdf) {
   this->it_node_ = new image_transport::ImageTransport(*this->rosnode_);
   this->color_pub_ = this->it_node_->advertiseCamera("camera/color/image_raw", 2);
   this->segmentation_pub_ = this->it_node_->advertiseCamera("camera/segmentation/image_raw", 2);
-
-  // Setup variables
-  this->scene_      = this->color_cam_->GetScene();
-}
-
-void SegmentationPlugin::onLogicFrame(ConstLogicalCameraImagePtr &_msg) {
-  auto scene_mngr = this->scene_->OgreSceneManager();
-  this->segmentation_objects_.clear();
-  std::vector<std::string> visible_objects;
-  for(auto model : _msg->model()) {
-    visible_objects.push_back(model.name());
-  }
-  auto entities = scene_mngr->getMovableObjectIterator("Entity");
-  while(entities.hasMoreElements()) {
-    Ogre::Entity* entity = static_cast<Ogre::Entity*>(entities.getNext());
-    for(auto vobj : visible_objects) {
-      if(!entity->getName().rfind("VISUAL_" + vobj + "::", 0)) {
-        this->segmentation_objects_.push_back(entity);
-      }
-    }
-  }
 }
 
 inline sensor_msgs::CameraInfo cameraInfo(const sensor_msgs::Image& image, 
@@ -135,37 +145,81 @@ inline sensor_msgs::CameraInfo cameraInfo(const sensor_msgs::Image& image,
   return info_msg;
 }
 
+void SegmentationPlugin::onLogicFrame(ConstLogicalCameraImagePtr &_msg) {
+  // Store all objects to consider for segmentation map
+  auto scene_mngr = this->scene_->OgreSceneManager();
+  this->segmentation_objects_.clear();
+  std::vector<std::string> visible_objects;
+  for(auto model : _msg->model()) {
+    visible_objects.push_back(model.name());
+  }
+  auto entities = scene_mngr->getMovableObjectIterator("Entity");
+  while(entities.hasMoreElements()) {
+    Ogre::Entity* entity = static_cast<Ogre::Entity*>(entities.getNext());
+    for(auto vobj : visible_objects) {
+      if(!entity->getName().rfind("VISUAL_" + vobj + "::", 0)) {
+        this->segmentation_objects_.push_back(entity);
+      }
+    }
+  }
+}
+
+void SegmentationPlugin::onDepthFrame() {
+  const float *depth_data_float = this->depth_cam_->DepthData();
+  for(uint32_t i = 0; i < this->depth_map_.size(); ++i) {
+    // Check clipping and overflow
+    if(depth_data_float[i] < this->clip_near_             ||
+       depth_data_float[i] > this->clip_far_              ||
+       depth_data_float[i] > DEPTH_CAM_SCALE * UINT16_MAX ||
+       depth_data_float[i] < 0) {
+      this->depth_map_[i] = 0;
+    } else {
+      this->depth_map_[i] = (uint16_t) (depth_data_float[i] / DEPTH_CAM_SCALE);
+    }
+  }
+}
+
 void SegmentationPlugin::onColorFrame() {
   std::cout << "Starting at: " << this->world_->SimTime().sec << std::endl;
+  // Register objects for collision detection
   auto collidor = new ::Collision::CollisionTools();
   for(auto obj : this->segmentation_objects_) {
     collidor->register_entity(obj);
   }
 
+  // Store helper variables
   uint16_t img_height = this->color_cam_->ImageHeight();
   uint16_t img_width  = this->color_cam_->ImageWidth();
   uint32_t num_pixels = img_height * img_width;
 
+  // Setup multithreading
   const size_t num_threads = std::thread::hardware_concurrency();
   std::vector<std::thread> threads(num_threads);
-
   for(uint8_t t = 0; t < num_threads; t++) {
     threads[t] = std::thread(std::bind(
+      // Calculate segmentation map
       [&](const int i_beg, const int i_end, const uint8_t t) {
         ignition::math::Vector3d origin, dir;
         for(int i = i_beg; i < i_end; i++) {
           uint16_t i_h = i / img_width;
           uint16_t i_w = i % img_width;
           uint16_t id = 0;
-          this->color_cam_->CameraToViewportRay(i_w, i_h, origin, dir);
-          Ogre::Ray ray(rendering::Conversions::Convert(origin), 
-                        rendering::Conversions::Convert(dir));
-          auto collision = collidor->check_ray_collision(ray, 
-                                                         Ogre::SceneManager::ENTITY_TYPE_MASK, 
-                                                         nullptr, 10.0, true);
-          if(collision.collided)
-            id = this->scene_->GetVisual(Ogre::any_cast<std::string>(
-                collision.entity->getUserObjectBindings().getUserAny()))->GetId();
+          // Only calculate for pixels with depth info
+          if(this->depth_map_[i]) {
+            // Setup ray for collision check
+            this->color_cam_->CameraToViewportRay(i_w, i_h, origin, dir);
+            Ogre::Ray ray(rendering::Conversions::Convert(origin), 
+                          rendering::Conversions::Convert(dir));
+            // Do collision check
+            auto collision = collidor->check_ray_collision(ray, 
+                                                           Ogre::SceneManager::ENTITY_TYPE_MASK, 
+                                                           nullptr, 10.0, true);
+            // Get ID of collided object
+            if(collision.collided)
+              id = this->scene_->GetVisual(Ogre::any_cast<std::string>(
+                  collision.entity->getUserObjectBindings().getUserAny()))->GetId();
+          }
+          // Store ID if there was a collision
           this->segmentation_map_[i] = id * 50; // TODO: remove factor
         }
       },
@@ -173,9 +227,11 @@ void SegmentationPlugin::onColorFrame() {
     (t + 1) == num_threads ? num_pixels : (t + 1) * num_pixels / num_threads,
     t));
   }
+  // Do multithreading
   std::for_each(threads.begin(), threads.end(), 
                 [](std::thread& x) {x.join();});
 
+  // Setup ROS msg
   sensor_msgs::Image image_msg;
 #if GAZEBO_MAJOR_VERSION >= 9
   common::Time current_time = this->world_->SimTime();
@@ -186,16 +242,15 @@ void SegmentationPlugin::onColorFrame() {
   image_msg.header.stamp.sec  = current_time.sec;
   image_msg.header.stamp.nsec = current_time.nsec;
 
-  // copy from simulation image to ROS msg
+  auto camera_info_msg = cameraInfo(image_msg, 
+                                    this->color_cam_->HFOV().Radian());
+
+  // Publish color image
   fillImage(image_msg, 
             sensor_msgs::image_encodings::RGB8,
             this->color_cam_->ImageHeight(), this->color_cam_->ImageWidth(),
             this->color_cam_->ImageDepth() * this->color_cam_->ImageWidth(),
             reinterpret_cast<const void*>(this->color_cam_->ImageData()));
-
-  // publish to ROS
-  auto camera_info_msg = cameraInfo(image_msg, 
-                                    this->color_cam_->HFOV().Radian());
   this->color_pub_.publish(image_msg, camera_info_msg);
 
   // Publish segmentation map
@@ -205,6 +260,7 @@ void SegmentationPlugin::onColorFrame() {
             2 * this->color_cam_->ImageWidth(),
             reinterpret_cast<const void*>(this->segmentation_map_.data()));
   this->segmentation_pub_.publish(image_msg, camera_info_msg);
+
   std::cout << "Published at: " << this->world_->SimTime().sec << std::endl;
 }
 
