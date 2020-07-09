@@ -424,7 +424,7 @@
                {
 
                // get the bounding box to use
-               const Ogre::AxisAlignedBox* bb = (data->IsStatic) ? &data->StaticData->Box : &data->Entity->getWorldBoundingBox(true);
+               const Ogre::AxisAlignedBox* bb = (data->IsStatic) ? &data->StaticData->Box : &data->Entity->getWorldBoundingBox(false);
 
                // check if intersects and if so insert to return list (sorting comes in the end)
                std::pair<bool, Ogre::Real> inter = ray.intersects(*bb);
@@ -449,7 +449,7 @@
                }
                else
                {
-                  Ogre::Sphere sphere = data->Entity->getWorldBoundingSphere(true);
+                  Ogre::Sphere sphere = data->Entity->getWorldBoundingSphere(false);
                   sp = &sphere;
                }
 

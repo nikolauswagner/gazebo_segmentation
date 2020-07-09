@@ -6,7 +6,7 @@
 #include <gazebo/rendering/Conversions.hh>
 #include <ignition/math.hh>
 #include <gazebo_segmentation/NewMOC.h>
-
+#include <thread>
 #include <stdlib.h>
 
 namespace gazebo {
@@ -142,23 +142,39 @@ void SegmentationPlugin::onColorFrame() {
     collidor->register_entity(obj);
   }
 
-  ignition::math::Vector3d origin, dir;
-  for(uint16_t i_h = 0; i_h < this->color_cam_->ImageHeight(); i_h++) {
-    for(uint16_t i_w = 0; i_w < this->color_cam_->ImageWidth(); i_w++) {
-      uint16_t id = 0;
-      this->color_cam_->CameraToViewportRay(i_w, i_h, origin, dir);
-      Ogre::Ray ray(rendering::Conversions::Convert(origin), 
-                    rendering::Conversions::Convert(dir));
-//      auto collision = collidor->check_ray_collision(ray, 
-//                                                     Ogre::SceneManager::ENTITY_TYPE_MASK, 
-//                                                     nullptr, 10.0, true);
-//      if(collision.collided)
-//        id = this->scene_->GetVisual(Ogre::any_cast<std::string>(
-//            collision.entity->getUserObjectBindings().getUserAny()))->GetId();
+  uint16_t img_height = this->color_cam_->ImageHeight();
+  uint16_t img_width  = this->color_cam_->ImageWidth();
+  uint32_t num_pixels = img_height * img_width;
 
-      this->segmentation_map_[this->color_cam_->ImageWidth() * i_h + i_w] = id * 50; // TODO: remove factor
-    }
+  const size_t num_threads = std::thread::hardware_concurrency();
+  std::vector<std::thread> threads(num_threads);
+
+  for(uint8_t t = 0; t < num_threads; t++) {
+    threads[t] = std::thread(std::bind(
+      [&](const int i_beg, const int i_end, const uint8_t t) {
+        ignition::math::Vector3d origin, dir;
+        for(int i = i_beg; i < i_end; i++) {
+          uint16_t i_h = i / img_width;
+          uint16_t i_w = i % img_width;
+          uint16_t id = 0;
+          this->color_cam_->CameraToViewportRay(i_w, i_h, origin, dir);
+          Ogre::Ray ray(rendering::Conversions::Convert(origin), 
+                        rendering::Conversions::Convert(dir));
+          auto collision = collidor->check_ray_collision(ray, 
+                                                         Ogre::SceneManager::ENTITY_TYPE_MASK, 
+                                                         nullptr, 10.0, true);
+          if(collision.collided)
+            id = this->scene_->GetVisual(Ogre::any_cast<std::string>(
+                collision.entity->getUserObjectBindings().getUserAny()))->GetId();
+          this->segmentation_map_[i] = id * 50; // TODO: remove factor
+        }
+      },
+    t * num_pixels / num_threads,
+    (t + 1) == num_threads ? num_pixels : (t + 1) * num_pixels / num_threads,
+    t));
   }
+  std::for_each(threads.begin(), threads.end(), 
+                [](std::thread& x) {x.join();});
 
   sensor_msgs::Image image_msg;
 #if GAZEBO_MAJOR_VERSION >= 9
