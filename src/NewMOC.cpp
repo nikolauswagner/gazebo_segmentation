@@ -1,3 +1,11 @@
+/**
+* New Minimal Ogre Collision - rewritten simple Ogre collision detection based on the MOC idea.
+* Feel free to use this!
+*
+* Author: Ronen Ness
+* Since: 22/04/14
+*/
+
 #include <gazebo_segmentation/NewMOC.h>
 
    namespace Collision {
