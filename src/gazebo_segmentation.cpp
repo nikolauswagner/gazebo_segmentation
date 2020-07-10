@@ -36,12 +36,6 @@ void SegmentationPlugin::Load(physics::ModelPtr _parent, sdf::ElementPtr _sdf) {
   if(_sdf->HasElement("robot_namespace")) {
     this->robot_namespace_ = _sdf->GetElement("robot_namespace")->Get<std::string>() + "/";
   }
-  if(_sdf->HasElement("near")) {
-    this->clip_near_ = _sdf->GetElement("near")->Get<float>();
-  }
-  if(_sdf->HasElement("far")) {
-    this->clip_far_ = _sdf->GetElement("far")->Get<float>();
-  }
 
   // Get Gazebo sensors
   sensors::SensorManager *sensor_mngr = sensors::SensorManager::Instance();
@@ -78,6 +72,8 @@ void SegmentationPlugin::Load(physics::ModelPtr _parent, sdf::ElementPtr _sdf) {
                      this->depth_cam_->ImageWidth() << "*" << this->depth_cam_->ImageWidth());
     return;
   }
+  this->clip_near_ = this->depth_cam_->NearClip();
+  this->clip_far_  = this->depth_cam_->FarClip();
 
   // Setup Gazebo transport
   this->world_ = _parent->GetWorld();
