@@ -216,7 +216,7 @@ void SegmentationPlugin::onColorFrame() {
                   collision.entity->getUserObjectBindings().getUserAny()))->GetId();
           }
           // Store ID if there was a collision
-          this->segmentation_map_[i] = id * 50; // TODO: remove factor
+          this->segmentation_map_[i] = id; // TODO: remove factor
         }
       },
     t * num_pixels / num_threads,
