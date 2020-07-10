@@ -12,4 +12,4 @@ The plugin, however, employs multithreading to utilize all available CPU threads
 
 As a further performance boost, a segmentation map is only created for pixels with valid depth information. You can control this by setting the 'near' and 'far' clipping parameters of the depth camera employed by the plugin.
 
-Many thanks to Roman Ness for providing the [New Minimal Ogre Collision](http://wiki.ogre3d.org/New+Minimal+Ogre+Collision) library utilized in this project.
+Many thanks to Ronen Ness for providing the [New Minimal Ogre Collision](http://wiki.ogre3d.org/New+Minimal+Ogre+Collision) library utilized in this project.
