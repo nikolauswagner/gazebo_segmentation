@@ -34,7 +34,8 @@ void SegmentationPlugin::Load(physics::ModelPtr _parent, sdf::ElementPtr _sdf) {
 
   // Setup params
   if(_sdf->HasElement("robot_namespace")) {
-    this->robot_namespace_ = _sdf->GetElement("robot_namespace")->Get<std::string>() + "/";
+    this->robot_namespace_ = 
+        _sdf->GetElement("robot_namespace")->Get<std::string>() + "/";
   }
 
   // Get Gazebo sensors
@@ -209,14 +210,14 @@ void SegmentationPlugin::onColorFrame() {
             // Do collision check
             auto collision = collidor->check_ray_collision(ray, 
                                                            Ogre::SceneManager::ENTITY_TYPE_MASK, 
-                                                           nullptr, 10.0, true);
+                                                           nullptr, this->clip_near_, true);
             // Get ID of collided object
             if(collision.collided)
               id = this->scene_->GetVisual(Ogre::any_cast<std::string>(
                   collision.entity->getUserObjectBindings().getUserAny()))->GetId();
           }
           // Store ID if there was a collision
-          this->segmentation_map_[i] = id; // TODO: remove factor
+          this->segmentation_map_[i] = id;
         }
       },
     t * num_pixels / num_threads,
