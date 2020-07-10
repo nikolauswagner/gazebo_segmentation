@@ -113,7 +113,8 @@ void SegmentationPlugin::Load(physics::ModelPtr _parent, sdf::ElementPtr _sdf) {
       new camera_info_manager::CameraInfoManager(*this->rosnode_, 
                                                  this->GetHandle()));
   this->it_node_ = new image_transport::ImageTransport(*this->rosnode_);
-  this->color_pub_ = this->it_node_->advertiseCamera("camera/color/image_raw", 2);
+  this->color_pub_        = this->it_node_->advertiseCamera("camera/color/image_raw", 2);
+  this->depth_pub_        = this->it_node_->advertiseCamera("camera/depth/image_raw", 2);
   this->segmentation_pub_ = this->it_node_->advertiseCamera("camera/segmentation/image_raw", 2);
 }
 
@@ -210,7 +211,7 @@ void SegmentationPlugin::onColorFrame() {
             // Do collision check
             auto collision = collidor->check_ray_collision(ray, 
                                                            Ogre::SceneManager::ENTITY_TYPE_MASK, 
-                                                           nullptr, this->clip_near_, true);
+                                                           nullptr, this->clip_far_, true);
             // Get ID of collided object
             if(collision.collided)
               id = this->scene_->GetVisual(Ogre::any_cast<std::string>(
@@ -257,6 +258,14 @@ void SegmentationPlugin::onColorFrame() {
             2 * this->color_cam_->ImageWidth(),
             reinterpret_cast<const void*>(this->segmentation_map_.data()));
   this->segmentation_pub_.publish(image_msg, camera_info_msg);
+
+  // Publish depth map
+  fillImage(image_msg,
+            sensor_msgs::image_encodings::TYPE_16UC1,
+            this->color_cam_->ImageHeight(), this->color_cam_->ImageWidth(),
+            2 * this->color_cam_->ImageWidth(),
+            reinterpret_cast<const void*>(this->depth_map_.data()));
+  this->depth_pub_.publish(image_msg, camera_info_msg);
 
   std::cout << "Published at: " << this->world_->SimTime().sec << std::endl;
 }
