@@ -63,7 +63,7 @@ private:
   ros::NodeHandle *rosnode_;
   image_transport::ImageTransport *it_node_;
   boost::shared_ptr<camera_info_manager::CameraInfoManager> camera_info_manager_;
-  image_transport::CameraPublisher color_pub_, segmentation_pub_;//, depth_pub_;
+  image_transport::CameraPublisher color_pub_, segmentation_pub_, depth_pub_;
 
   // Params
   std::string robot_namespace_;
