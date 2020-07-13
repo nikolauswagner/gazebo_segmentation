@@ -239,15 +239,14 @@ void SegmentationPlugin::onColorFrame() {
   image_msg.header.stamp.sec  = current_time.sec;
   image_msg.header.stamp.nsec = current_time.nsec;
 
-  auto camera_info_msg = cameraInfo(image_msg, 
-                                    this->color_cam_->HFOV().Radian());
-
   // Publish color image
   fillImage(image_msg, 
             sensor_msgs::image_encodings::RGB8,
             this->color_cam_->ImageHeight(), this->color_cam_->ImageWidth(),
             this->color_cam_->ImageDepth() * this->color_cam_->ImageWidth(),
             reinterpret_cast<const void*>(this->color_cam_->ImageData()));
+  auto camera_info_msg = cameraInfo(image_msg, 
+                                    this->color_cam_->HFOV().Radian());
   this->color_pub_.publish(image_msg, camera_info_msg);
 
   // Publish segmentation map
