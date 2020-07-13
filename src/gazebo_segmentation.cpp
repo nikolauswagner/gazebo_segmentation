@@ -178,7 +178,6 @@ void SegmentationPlugin::onDepthFrame() {
 }
 
 void SegmentationPlugin::onColorFrame() {
-  std::cout << "Starting at: " << this->world_->SimTime().sec << std::endl;
   // Register objects for collision detection
   auto collidor = new ::Collision::CollisionTools();
   for(auto obj : this->segmentation_objects_) {
@@ -266,8 +265,6 @@ void SegmentationPlugin::onColorFrame() {
             2 * this->color_cam_->ImageWidth(),
             reinterpret_cast<const void*>(this->depth_map_.data()));
   this->depth_pub_.publish(image_msg, camera_info_msg);
-
-  std::cout << "Published at: " << this->world_->SimTime().sec << std::endl;
 }
 
 }
